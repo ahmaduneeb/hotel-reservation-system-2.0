@@ -170,10 +170,4 @@ This project helps in understanding:
 
 This project is for **educational purposes**. You are free to modify and improve it.
 
----
 
-If you want, I can also add:
-
-* Screenshots section
-* Sample input/output
-* Admin login system description
