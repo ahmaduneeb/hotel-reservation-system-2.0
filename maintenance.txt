@@ -1,0 +1,21 @@
+Room 10: The washroom was not working properly.  
+Room 15: The air conditioner was making loud noises.  
+Room 21: The showerhead was clogged and water pressure was low.  
+Room 7: The room lights were flickering.  
+Room 12: The TV remote was not functioning.  
+Room 19: The mini fridge was not cooling.  
+Room 8: The door lock was jammed and hard to open.  
+Room 22: The heater was not turning on.  
+Room 5: The carpet was stained and needed cleaning.  
+Room 18: The curtains were torn and needed replacement.  
+Room 11: The bathroom faucet was leaking.  
+Room 14: The room smelled damp and needed ventilation.  
+Room 9: The Wi-Fi connection in the room was unstable.  
+Room 20: The painting on the wall was peeling off.  
+Room 16: The telephone in the room was not working.  
+Room 6: The AC filter was dirty and required cleaning.  
+Room 13: The bed sheets were torn and needed replacement.  
+Room 17: The window latch was broken.  
+Room 3: The room was dusty and needed proper cleaning.  
+Room 4: The ceiling fan was wobbling and noisy.  
+Room 0: 
