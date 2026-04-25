@@ -1,8 +1,9 @@
 @echo off
+set PYTHON_EXE="C:\Users\USER\AppData\Local\Programs\Python\Python311\python.exe"
 echo Starting Hotel Management System 3.0 (MySQL)...
 echo Starting Python Backend...
-start /b python backend_v3.py
+start /b %PYTHON_EXE% backend_v3.py
 timeout /t 5
 echo Starting Python GUI...
-python gui_v3.py
+%PYTHON_EXE% gui_v3.py
 pause

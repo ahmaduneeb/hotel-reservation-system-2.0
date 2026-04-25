@@ -1,25 +1,33 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import pymysql
 import hashlib
 from typing import List, Optional
+import uvicorn
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("hotel-backend")
 
 app = FastAPI()
 
-# MySQL Configuration
+# MySQL Configuration (XAMPP default)
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
     "password": "",
-    "database": "hotel_db"
+    "database": "hotel_db",
+    "charset": "utf8mb4",
+    "cursorclass": pymysql.cursors.DictCursor
 }
 
-def get_db():
-    conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
+def get_db_conn():
     try:
-        yield conn
-    finally:
-        conn.close()
+        return pymysql.connect(**DB_CONFIG)
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        return None
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -44,93 +52,129 @@ class RoomRequest(BaseModel):
 
 # --- AUTH ---
 @app.post("/auth/login")
-def login(req: LoginRequest):
-    conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT role FROM users WHERE username = %s AND password_hash = %s", 
-                       (req.username, hash_password(req.password)))
-        user = cursor.fetchone()
-    conn.close()
+async def login(req: LoginRequest):
+    conn = get_db_conn()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection error")
     
-    if user:
-        return {"status": "success", "role": user["role"], "token": "dummy-jwt-token"}
-    raise HTTPException(status_code=401, detail="Invalid credentials")
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT role FROM users WHERE username = %s AND password_hash = %s"
+            cursor.execute(sql, (req.username, hash_password(req.password)))
+            user = cursor.fetchone()
+            if user:
+                return {"status": "success", "role": user["role"], "token": "dummy-jwt-token"}
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        conn.close()
+    
+    raise HTTPException(status_code=401, detail="Invalid username or password")
 
 # --- ROOMS ---
 @app.get("/rooms")
-def get_rooms():
-    conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT * FROM rooms")
-        rooms = cursor.fetchall()
-    conn.close()
-    return rooms
-
-@app.post("/rooms")
-def add_room(req: RoomRequest):
-    conn = pymysql.connect(**DB_CONFIG)
+async def get_rooms():
+    conn = get_db_conn()
+    if not conn:
+        return []
     try:
         with conn.cursor() as cursor:
-            cursor.execute("INSERT INTO rooms (number, type, price, capacity, availability, maintenance) VALUES (%s, %s, %s, %s, 1, 0)",
-                           (req.number, req.type, req.price, req.capacity))
+            cursor.execute("SELECT * FROM rooms")
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+@app.post("/rooms")
+async def add_room(req: RoomRequest):
+    conn = get_db_conn()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection error")
+    try:
+        with conn.cursor() as cursor:
+            sql = "INSERT INTO rooms (number, type, price, capacity, availability, maintenance) VALUES (%s, %s, %s, %s, 1, 0)"
+            cursor.execute(sql, (req.number, req.type, req.price, req.capacity))
         conn.commit()
         return {"status": "success"}
+    except pymysql.err.IntegrityError:
+        raise HTTPException(status_code=400, detail="Room number already exists")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Add room error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 # --- BOOKINGS ---
 @app.post("/bookings")
-def book_room(req: BookingRequest):
-    conn = pymysql.connect(**DB_CONFIG)
+async def book_room(req: BookingRequest):
+    conn = get_db_conn()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection error")
     try:
         with conn.cursor() as cursor:
-            # Check availability
-            cursor.execute("SELECT availability FROM rooms WHERE number = %s", (req.room_number,))
+            # Check room availability
+            cursor.execute("SELECT availability, maintenance FROM rooms WHERE number = %s", (req.room_number,))
             room = cursor.fetchone()
-            if not room or not room[0]:
-                raise HTTPException(status_code=400, detail="Room not available")
+            if not room:
+                raise HTTPException(status_code=404, detail="Room not found")
+            if not room["availability"] or room["maintenance"]:
+                raise HTTPException(status_code=400, detail="Room is not available for booking")
             
-            # Start Transaction
+            # Record customer
             cursor.execute("INSERT INTO customers (name, phone, room_number, check_in, check_out) VALUES (%s, %s, %s, %s, %s)",
                            (req.name, req.phone, req.room_number, req.check_in, req.check_out))
+            
+            # Mark room as occupied
             cursor.execute("UPDATE rooms SET availability = 0 WHERE number = %s", (req.room_number,))
             
-            # Revenue
+            # Log Revenue
             cursor.execute("INSERT INTO revenue_log (amount, source) SELECT price, 'Room' FROM rooms WHERE number = %s", (req.room_number,))
             
         conn.commit()
         return {"status": "success"}
     except Exception as e:
         conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Booking error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 # --- STAFF ---
 @app.get("/staff")
-def get_staff():
-    conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT * FROM staff")
-        staff = cursor.fetchall()
-    conn.close()
-    return staff
+async def get_staff():
+    conn = get_db_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM staff")
+            return cursor.fetchall()
+    finally:
+        conn.close()
 
 # --- REVENUE ---
 @app.get("/revenue")
-def get_revenue():
-    conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT source, SUM(amount) as total FROM revenue_log GROUP BY source")
-        rows = cursor.fetchall()
-        
-        rev = {row["source"]: float(row["total"]) for row in rows}
-        rev["total"] = sum(rev.values())
-    conn.close()
-    return rev
+async def get_revenue():
+    conn = get_db_conn()
+    if not conn:
+        return {"Room": 0, "Service": 0, "total": 0}
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT source, SUM(amount) as total FROM revenue_log GROUP BY source")
+            rows = cursor.fetchall()
+            
+            rev = {"Room": 0.0, "Service": 0.0}
+            total = 0.0
+            for row in rows:
+                source = row["source"]
+                amt = float(row["total"]) if row["total"] is not None else 0.0
+                rev[source] = amt
+                total += amt
+            rev["total"] = total
+            return rev
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    logger.info("Starting Backend Server...")
+    uvicorn.run(app, host="127.0.0.1", port=8080)
